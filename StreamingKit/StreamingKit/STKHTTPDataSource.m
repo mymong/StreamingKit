@@ -606,3 +606,31 @@
 }
 
 @end
+
+@implementation STKHTTPDataSource (Exported)
+
+- (void)setSupportsSeek:(BOOL)supportsSeek {
+    self->supportsSeek = supportsSeek;
+}
+
+- (NSDictionary *)httpHeaders {
+    return self->httpHeaders;
+}
+
+- (void)setRequestHeaders:(NSDictionary *)requestHeaders {
+    self->requestHeaders = requestHeaders;
+}
+
+- (void)setSeekStart:(SInt64)seekStart {
+    self->seekStart = seekStart;
+}
+
+- (SInt64)seekStart {
+    return self->seekStart;
+}
+
+- (void)setIceHeaderSearchComplete:(BOOL)iceHeaderSearchComplete {
+    self->iceHeaderSearchComplete = iceHeaderSearchComplete;
+}
+
+@end

@@ -57,4 +57,23 @@ typedef void(^STKAsyncURLProvider)(STKHTTPDataSource* dataSource, BOOL forSeek, 
 
 @end
 
+@interface STKHTTPDataSource (Exported)
+
+- (void)setSupportsSeek:(BOOL)supportsSeek;
+- (NSDictionary *)httpHeaders;
+- (void)setRequestHeaders:(NSDictionary *)requestHeaders;
+- (SInt64)seekStart;
+- (void)setSeekStart:(SInt64)seekStart;
+- (void)setIceHeaderSearchComplete:(BOOL)iceHeaderSearchComplete;
+
+@end
+
+@interface STKHTTPDataSource (Public)
+
+- (BOOL)parseHttpHeader;
+- (void)openForSeek:(BOOL)forSeek;
+- (NSDictionary *)parseIceHeader:(NSData *)headerData;
+
+@end
+
 NS_ASSUME_NONNULL_END
