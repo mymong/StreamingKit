@@ -574,7 +574,8 @@
             
             stream = 0;
 
-            [self errorOccured];
+            // error would be reported by 'ReadStreamCallbackProc'.
+            // [self errorOccured];
 
             return;
         }

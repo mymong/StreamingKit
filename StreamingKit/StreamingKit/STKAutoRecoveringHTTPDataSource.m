@@ -317,7 +317,9 @@ static void PopulateOptionsWithDefault(STKAutoRecoveringHTTPDataSourceOptions* o
     
 	if (self.innerDataSource.eventsRunLoop)
 	{
-		[self.innerDataSource reconnect];
+        [self.innerDataSource reconnect];
+        
+        ticksWhenLastDataReceived = GetTickCount();
 	}
 }
 
@@ -375,13 +377,21 @@ static void PopulateOptionsWithDefault(STKAutoRecoveringHTTPDataSourceOptions* o
 {
     NSLog(@"dataSourceErrorOccured");
     
-    if (self.innerDataSource.httpStatusCode == 416 /* Range out of bounds */)
-    {
-        [super dataSourceEof:dataSource];
-    }
-    else
+    if (self.innerDataSource.httpStatusCode == 408)
     {
         [self processRetryOnError];
+    }
+    else {
+        [self destroyTimeoutTimer];
+        
+        if (self.innerDataSource.httpStatusCode == 416 /* Range out of bounds */)
+        {
+            [super dataSourceEof:dataSource];
+        }
+        else
+        {
+            [super dataSourceErrorOccured:dataSource];
+        }
     }
 }
 
