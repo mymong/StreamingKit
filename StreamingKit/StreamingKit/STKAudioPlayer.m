@@ -195,6 +195,21 @@ STKAudioPlayerInternalState;
 }
 @end
 
+#pragma mark STKAudioPlayerDelegateObject
+
+@interface STKAudioPlayerDelegateObject : NSObject
+@property (nonatomic, unsafe_unretained) id<STKAudioPlayerDelegate> delegate;
+@end
+
+@implementation STKAudioPlayerDelegateObject
+- (instancetype)initWithDelegate:(id<STKAudioPlayerDelegate>)delegate {
+    if (self = [super init]) {
+        _delegate = delegate;
+    }
+    return self;
+}
+@end
+
 #pragma mark STKAudioPlayer
 
 static UInt32 maxFramesPerSlice = 4096;
@@ -303,6 +318,7 @@ static AudioStreamBasicDescription recordAudioStreamBasicDescription;
 
 @property (readwrite) STKAudioPlayerInternalState internalState;
 @property (readwrite) STKAudioPlayerInternalState stateBeforePaused;
+@property (readwrite) NSMutableArray<STKAudioPlayerDelegateObject *> *delegates;
 
 -(void) handlePropertyChangeForFileStream:(AudioFileStreamID)audioFileStreamIn fileStreamPropertyID:(AudioFileStreamPropertyID)propertyID ioFlags:(UInt32*)ioFlags;
 -(void) handleAudioPackets:(const void*)inputData numberBytes:(UInt32)numberBytes numberPackets:(UInt32)numberPackets packetDescriptions:(AudioStreamPacketDescription*)packetDescriptions;
@@ -470,9 +486,10 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
         
         OSSpinLockUnlock(&internalStateLock);
         
-        dispatch_async(dispatch_get_main_queue(), ^
-        {
-            [self.delegate audioPlayer:self stateChanged:self.state previousState:previousState];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self forEachDelegateDo:^(id<STKAudioPlayerDelegate> delegate) {
+                [delegate audioPlayer:self stateChanged:self.state previousState:previousState];
+            }];
         });
     }
     else
@@ -488,20 +505,11 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
 
 -(void) logInfo:(NSString*)line
 {
-    if ([NSThread currentThread].isMainThread)
-    {
-        if ([self.delegate respondsToSelector:@selector(audioPlayer:logInfo:)])
-        {
-            [self.delegate audioPlayer:self logInfo:line];
+    [self forEachDelegateDo:^(id<STKAudioPlayerDelegate> delegate) {
+        if ([delegate respondsToSelector:@selector(audioPlayer:logInfo:)]) {
+            [delegate audioPlayer:self logInfo:line];
         }
-    }
-    else
-    {
-        if ([self.delegate respondsToSelector:@selector(audioPlayer:logInfo:)])
-        {
-            [self.delegate audioPlayer:self logInfo:line];
-        }
-    }
+    }];
 }
 
 -(instancetype) init
@@ -552,6 +560,7 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
         threadFinishedCondLock = [[NSConditionLock alloc] initWithCondition:0];
         
         self.internalState = STKAudioPlayerInternalStateInitialised;
+        self.delegates = [NSMutableArray new];
         
         upcomingQueue = [[NSMutableArray alloc] init];
         bufferingQueue = [[NSMutableArray alloc] init];
@@ -664,6 +673,36 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
 #endif
 }
 
+- (void)addDelegate:(id<STKAudioPlayerDelegate>)delegate {
+    STKAudioPlayerDelegateObject *obj = [[STKAudioPlayerDelegateObject alloc] initWithDelegate:delegate];
+    [self.delegates addObject:obj];
+}
+
+- (void)removeDelegate:(id<STKAudioPlayerDelegate>)delegate {
+    __block NSUInteger index = NSNotFound;
+    [self.delegates enumerateObjectsUsingBlock:^(STKAudioPlayerDelegateObject *obj, NSUInteger idx, BOOL *stop) {
+        if (obj.delegate == delegate) {
+            index = idx;
+            *stop = YES;
+        }
+    }];
+    if (index != NSNotFound) {
+        [self.delegates removeObjectAtIndex:index];
+    }
+}
+
+- (void)forEachDelegateDo:(void (^)(id<STKAudioPlayerDelegate> delegate))block {
+    if (self.delegate) {
+        block(self.delegate);
+    }
+    for (STKAudioPlayerDelegateObject *obj in self.delegates) {
+        id<STKAudioPlayerDelegate> delegate = obj.delegate;
+        if (delegate) {
+            block(delegate);
+        }
+    }
+}
+
 +(STKDataSource*) dataSourceFromURL:(NSURL*)url
 {
     STKDataSource* retval = nil;
@@ -684,38 +723,30 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
 {
     pthread_mutex_lock(&playerMutex);
     {
-        if ([self.delegate respondsToSelector:@selector(audioPlayer:didCancelQueuedItems:)])
+        NSMutableArray* array = [[NSMutableArray alloc] initWithCapacity:bufferingQueue.count + upcomingQueue.count];
+        
+        for (STKQueueEntry* entry in upcomingQueue)
         {
-            NSMutableArray* array = [[NSMutableArray alloc] initWithCapacity:bufferingQueue.count + upcomingQueue.count];
-            
-            for (STKQueueEntry* entry in upcomingQueue)
-            {
-                [array addObject:entry.queueItemId];
-            }
-			
-			for (STKQueueEntry* entry in bufferingQueue)
-            {
-                [array addObject:entry.queueItemId];
-            }
-            
-            [upcomingQueue removeAllObjects];
-			[bufferingQueue removeAllObjects];
-            
-            if (array.count > 0)
-            {
-                [self playbackThreadQueueMainThreadSyncBlock:^
-                {
-                    if ([self.delegate respondsToSelector:@selector(audioPlayer:didCancelQueuedItems:)])
-                    {
-                        [self.delegate audioPlayer:self didCancelQueuedItems:array];
+            [array addObject:entry.queueItemId];
+        }
+        
+        for (STKQueueEntry* entry in bufferingQueue)
+        {
+            [array addObject:entry.queueItemId];
+        }
+        
+        [upcomingQueue removeAllObjects];
+        [bufferingQueue removeAllObjects];
+        
+        if (array.count > 0)
+        {
+            [self playbackThreadQueueMainThreadSyncBlock:^ {
+                [self forEachDelegateDo:^(id<STKAudioPlayerDelegate> delegate) {
+                    if ([delegate respondsToSelector:@selector(audioPlayer:didCancelQueuedItems:)]) {
+                        [delegate audioPlayer:self didCancelQueuedItems:array];
                     }
                 }];
-            }
-        }
-        else
-        {
-            [bufferingQueue removeAllObjects];
-            [upcomingQueue removeAllObjects];
+            }];
         }
     }
     pthread_mutex_unlock(&playerMutex);
@@ -969,9 +1000,10 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
 {
     self.internalState = STKAudioPlayerInternalStateError;
     
-    [self playbackThreadQueueMainThreadSyncBlock:^
-    {
-        [self.delegate audioPlayer:self unexpectedError:errorCodeIn];
+    [self playbackThreadQueueMainThreadSyncBlock:^ {
+        [self forEachDelegateDo:^(id<STKAudioPlayerDelegate> delegate) {
+            [delegate audioPlayer:self unexpectedError:errorCodeIn];
+        }];
     }];
 }
 
@@ -1200,9 +1232,10 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
         
         if (!isPlayingSameItemProbablySeek && entry)
         {
-            [self playbackThreadQueueMainThreadSyncBlock:^
-            {
-                [self.delegate audioPlayer:self didFinishPlayingQueueItemId:queueItemId withReason:stopReason andProgress:progress andDuration:duration];
+            [self playbackThreadQueueMainThreadSyncBlock:^{
+                [self forEachDelegateDo:^(id<STKAudioPlayerDelegate> delegate) {
+                    [delegate audioPlayer:self didFinishPlayingQueueItemId:queueItemId withReason:stopReason andProgress:progress andDuration:duration];
+                }];
             }];
         }
         
@@ -1210,9 +1243,10 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
         {
             [self setInternalState:STKAudioPlayerInternalStateWaitingForData];
             
-            [self playbackThreadQueueMainThreadSyncBlock:^
-            {
-                [self.delegate audioPlayer:self didStartPlayingQueueItemId:playingQueueItemId];
+            [self playbackThreadQueueMainThreadSyncBlock:^{
+                [self forEachDelegateDo:^(id<STKAudioPlayerDelegate> delegate) {
+                    [delegate audioPlayer:self didStartPlayingQueueItemId:playingQueueItemId];
+                }];
             }];
         }
     }
@@ -1224,9 +1258,10 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
         
         if (!isPlayingSameItemProbablySeek && entry)
         {
-            [self playbackThreadQueueMainThreadSyncBlock:^
-            {
-				[self.delegate audioPlayer:self didFinishPlayingQueueItemId:queueItemId withReason:stopReason andProgress:progress andDuration:duration];
+            [self playbackThreadQueueMainThreadSyncBlock:^{
+                [self forEachDelegateDo:^(id<STKAudioPlayerDelegate> delegate) {
+                    [delegate audioPlayer:self didFinishPlayingQueueItemId:queueItemId withReason:stopReason andProgress:progress andDuration:duration];
+                }];
             }];
         }
     }
@@ -1640,9 +1675,10 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
     
     [self closeRecordAudioFile];
     
-    [self dispatchSyncOnMainThread:^
-    {
-        [self.delegate audioPlayer:self didFinishBufferingSourceWithQueueItemId:queueItemId];
+    [self dispatchSyncOnMainThread:^{
+        [self forEachDelegateDo:^(id<STKAudioPlayerDelegate> delegate) {
+            [delegate audioPlayer:self didFinishBufferingSourceWithQueueItemId:queueItemId];
+        }];
     }];
 
     pthread_mutex_lock(&playerMutex);
